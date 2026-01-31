@@ -47,7 +47,7 @@ _GEMINI_IMAGE_THOUGHT_SIGNATURE_CACHE = _BoundedFIFOCache(max_items=100)
 def _normalize_base64_payload(payload: str) -> str:
     if not payload:
         return ""
-    cleaned = re.sub(r"\\s+", "", payload)
+    cleaned = re.sub(r"\s+", "", payload)
     while len(cleaned) % 4 == 1:
         cleaned = cleaned[:-1]
     pad_len = (-len(cleaned)) % 4
@@ -60,7 +60,8 @@ def _gemini_image_cache_key_from_base64(data_base64: str) -> str | None:
         return None
     try:
         image_bytes = base64.b64decode(_normalize_base64_payload(data_base64))
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to decode base64 image data: {e}")
         return None
     if not image_bytes:
         return None
@@ -896,7 +897,8 @@ def gemini_audio_inline_data_to_wav_base64(mime_type: str, data_base64: str) -> 
             trimmed = trimmed[:-1]
         padded = trimmed + ("=" * ((4 - (len(trimmed) % 4)) % 4))
         pcm_bytes = base64.b64decode(padded)
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to decode audio base64 data: {e}")
         return None
 
     buf = io.BytesIO()
@@ -911,7 +913,8 @@ def get_image_format(file_content: bytes):
     try:
         img = Image.open(io.BytesIO(file_content))
         return img.format.lower()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to determine image format: {e}")
         return None
 
 def encode_image(file_content: bytes):
@@ -928,9 +931,27 @@ def encode_image(file_content: bytes):
         raise ValueError(f"不支持的图片格式: {img_format}")
 
 async def get_image_from_url(url):
+    # Validate URL scheme to prevent SSRF attacks
+    parsed_url = urlparse(url)
+    if parsed_url.scheme not in ('http', 'https'):
+        raise HTTPException(status_code=400, detail=f"Invalid URL scheme: {parsed_url.scheme}")
+    
+    # Block localhost and private IP ranges
+    hostname = parsed_url.hostname
+    if hostname:
+        hostname_lower = hostname.lower()
+        if hostname_lower in ('localhost', '127.0.0.1', '::1'):
+            raise HTTPException(status_code=400, detail="Access to localhost is not allowed")
+        # Block common private IP ranges
+        if hostname_lower.startswith(('10.', '172.16.', '172.17.', '172.18.', '172.19.', 
+                                      '172.20.', '172.21.', '172.22.', '172.23.', '172.24.',
+                                      '172.25.', '172.26.', '172.27.', '172.28.', '172.29.',
+                                      '172.30.', '172.31.', '192.168.', '169.254.')):
+            raise HTTPException(status_code=400, detail="Access to private IP ranges is not allowed")
+    
     transport = httpx.AsyncHTTPTransport(
         http2=True,
-        verify=False,
+        verify=True,
         retries=1
     )
     async with httpx.AsyncClient(transport=transport) as client:

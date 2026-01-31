@@ -891,7 +891,8 @@ async def fetch_response(client, url, headers, payload, engine, model, timeout=2
             return
         try:
             response_json = response.json()
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to parse JSON response, falling back to text: {e}")
             response_json = {"text": response.text}
         normalized = normalize_search_response(url, response_json)
         json_data = await asyncio.to_thread(json.dumps, normalized, ensure_ascii=False)
@@ -1202,7 +1203,8 @@ async def fetch_doubao_translation_response_stream(client, url, headers, payload
 
                 try:
                     event_data = await asyncio.to_thread(json.loads, data_str)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to parse event data JSON: {e}")
                     continue
 
                 if event_name == "response.output_text.delta":
