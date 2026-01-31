@@ -11,6 +11,7 @@ import asyncio
 import threading
 import traceback
 import wave
+import ipaddress
 from time import time
 from PIL import Image
 from fastapi import HTTPException
@@ -68,18 +69,40 @@ def _gemini_image_cache_key_from_base64(data_base64: str) -> str | None:
     return hashlib.sha256(image_bytes).hexdigest()
 
 def cache_put_gemini_image_thought_signature(inline_data_base64: str, thought_signature: str) -> None:
+    """Cache the thought signature for a Gemini image by its base64 data.
+    
+    Args:
+        inline_data_base64: Base64-encoded image data
+        thought_signature: Thought signature string to cache
+    """
     key = _gemini_image_cache_key_from_base64(inline_data_base64)
     if not key:
         return
     _GEMINI_IMAGE_THOUGHT_SIGNATURE_CACHE.set(key, thought_signature)
 
 def cache_get_gemini_image_thought_signature(inline_data_base64: str) -> str | None:
+    """Retrieve cached thought signature for a Gemini image.
+    
+    Args:
+        inline_data_base64: Base64-encoded image data
+        
+    Returns:
+        Cached thought signature if found, None otherwise
+    """
     key = _gemini_image_cache_key_from_base64(inline_data_base64)
     if not key:
         return None
     return _GEMINI_IMAGE_THOUGHT_SIGNATURE_CACHE.get(key)
 
-def get_model_dict(provider):
+def get_model_dict(provider: dict) -> dict:
+    """Extract model mapping from provider configuration.
+    
+    Args:
+        provider: Provider configuration dictionary containing 'model' key
+        
+    Returns:
+        Dictionary mapping model names to their original names
+    """
     model_dict = {}
     if "model" not in provider:
         logger.error(f"Error: model is not set in provider: {provider}")
@@ -141,7 +164,17 @@ class BaseAPI:
             self.audio_speech = api_url
             self.embeddings = urlunparse(parsed_url[:2] + (before_v1 + "/v1beta/embeddings",) + ("",) * 3)
 
-def get_engine(provider, endpoint=None, original_model=""):
+def get_engine(provider: dict, endpoint: str = None, original_model: str = "") -> tuple:
+    """Determine the engine type and streaming capability for a provider.
+    
+    Args:
+        provider: Provider configuration dictionary
+        endpoint: API endpoint path
+        original_model: Original model name
+        
+    Returns:
+        Tuple of (engine_name, supports_streaming)
+    """
     # Config-driven Jina search: route via /search endpoints and use a dedicated engine.
     if endpoint in ("/search", "/v1/search"):
         return "search", False
@@ -298,6 +331,16 @@ async def update_initial_model(provider):
         return []
 
 def safe_get(data, *keys, default=None):
+    """Safely navigate nested data structures with a fallback default.
+    
+    Args:
+        data: The data structure to navigate (dict, list, or object)
+        *keys: Sequence of keys to traverse
+        default: Default value to return if key path not found
+        
+    Returns:
+        The value at the specified key path, or default if not found
+    """
     for key in keys:
         try:
             if isinstance(data, (dict, list)):
@@ -312,7 +355,7 @@ def safe_get(data, *keys, default=None):
         return default
     return data
 
-def parse_rate_limit(limit_string):
+def parse_rate_limit(limit_string: str) -> tuple:
     # 定义时间单位到秒的映射
     time_units = {
         's': 1, 'sec': 1, 'second': 1,
@@ -936,18 +979,22 @@ async def get_image_from_url(url):
     if parsed_url.scheme not in ('http', 'https'):
         raise HTTPException(status_code=400, detail=f"Invalid URL scheme: {parsed_url.scheme}")
     
-    # Block localhost and private IP ranges
+    # Block localhost and private IP ranges using ipaddress module
     hostname = parsed_url.hostname
     if hostname:
         hostname_lower = hostname.lower()
+        # Check for localhost variants
         if hostname_lower in ('localhost', '127.0.0.1', '::1'):
             raise HTTPException(status_code=400, detail="Access to localhost is not allowed")
-        # Block common private IP ranges
-        if hostname_lower.startswith(('10.', '172.16.', '172.17.', '172.18.', '172.19.', 
-                                      '172.20.', '172.21.', '172.22.', '172.23.', '172.24.',
-                                      '172.25.', '172.26.', '172.27.', '172.28.', '172.29.',
-                                      '172.30.', '172.31.', '192.168.', '169.254.')):
-            raise HTTPException(status_code=400, detail="Access to private IP ranges is not allowed")
+        
+        # Try to parse as IP address and check if it's private
+        try:
+            ip = ipaddress.ip_address(hostname)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                raise HTTPException(status_code=400, detail="Access to private IP ranges is not allowed")
+        except ValueError:
+            # Not an IP address, it's a hostname - this is fine
+            pass
     
     transport = httpx.AsyncHTTPTransport(
         http2=True,
