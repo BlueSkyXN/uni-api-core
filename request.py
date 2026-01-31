@@ -51,7 +51,8 @@ def _decode_gemini_thought_signature_from_tool_call_id(tool_call_id: str | None)
     padded = encoded + ("=" * ((4 - (len(encoded) % 4)) % 4))
     try:
         return base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to decode tool_call_id: {e}")
         return None
 
 def _gemini_response_modalities(original_model: str, request_modalities: list[str] | None, has_audio: bool) -> list[str] | None:
@@ -176,7 +177,8 @@ async def get_gemini_payload(request, engine, provider, api_key=None):
 
     try:
         request_messages = [Message(role="user", content=request.prompt)]
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Failed to create message from prompt, using messages instead: {e}")
         request_messages = copy.deepcopy(request.messages)
     for msg in request_messages:
         if msg.role == "assistant":
@@ -608,7 +610,7 @@ async def get_vertex_gemini_payload(request, engine, provider, api_key=None):
             MODEL_ID=original_model,
             stream=gemini_stream
         )
-    elif api_key is not None and api_key[2] == ".":
+    elif api_key is not None and len(api_key) > 2 and api_key[2] == ".":
         url = f"https://aiplatform.googleapis.com/v1/publishers/google/models/{original_model}:{gemini_stream}?key={api_key}"
         headers.pop("Authorization", None)
     else:
@@ -1630,7 +1632,8 @@ async def get_codex_payload(request, engine, provider, api_key=None):
             if params is not None:
                 try:
                     item["parameters"] = params.model_dump(by_alias=True, exclude_none=True)
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to dump parameters, using raw value: {e}")
                     item["parameters"] = params
             tools_out.append(item)
         if tools_out:
@@ -2448,13 +2451,13 @@ async def get_whisper_payload(request, engine, provider, api_key=None):
     url = BaseAPI(url).audio_transcriptions
 
     if "dashscope.aliyuncs.com" in url:
-        client = httpx.AsyncClient()
-        certificate = await get_upload_certificate(client, api_key, original_model)
-        if not certificate:
-            return
+        async with httpx.AsyncClient() as client:
+            certificate = await get_upload_certificate(client, api_key, original_model)
+            if not certificate:
+                return
 
-        # 步骤 2: 上传文件
-        oss_url = await upload_file_to_oss(client, certificate, request.file)
+            # 步骤 2: 上传文件
+            oss_url = await upload_file_to_oss(client, certificate, request.file)
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
